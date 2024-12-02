@@ -9,30 +9,31 @@ const userRoutes = require('./routes/userRoutes');
 
 const app = express();
 
-// Middleware pour autoriser les requêtes CORS et JSON
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Middleware généraux
+app.use(cors()); // Autorise les requêtes CORS
+app.use(express.json()); // Parse le JSON des requêtes
+app.use(express.urlencoded({ extended: false })); // Parse les données URL-encodées
 
 // Servir les images téléchargées depuis le dossier "uploads"
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 console.log("Dossier 'uploads' configuré pour servir les fichiers statiques");
 
 // Connexion à MongoDB
-mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose
+  .connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('Connexion à MongoDB réussie'))
   .catch((error) => console.error('Erreur de connexion à MongoDB :', error));
 
 // Routes API
-app.use('/api/books', bookRoutes);
-app.use('/api/auth', userRoutes);
+app.use('/api/books', bookRoutes); // Routes pour les livres
+app.use('/api/auth', userRoutes); // Routes pour les utilisateurs (signup, login)
 
-// Route de test
+// Route de test (facultative)
 app.get('/', (req, res) => {
   res.send('Bienvenue sur Mon Vieux Grimoire API !');
 });
 
-// Lancer le serveur
+// Démarrage du serveur avec PORT par défaut à 5000
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Serveur lancé sur le port ${PORT}`);

@@ -2,6 +2,7 @@ const Book = require('../mongoose-models/Book');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+const isCreator = require('../middleware/Creator-Validation');
 
 // Créer un livre avec une note initiale facultative
 exports.createBook = async (req, res) => {
@@ -125,95 +126,90 @@ exports.getBookById = async (req, res) => {
 // Ajouter une note à un livre (sans restriction pour le créateur)
 exports.rateBook = async (req, res) => {
   try {
-    const { rating } = req.body;
-    const userId = req.userId;
+    const { userId } = req; // ID de l'utilisateur connecté
+    const { id } = req.params; // ID du livre
+    const { grade } = req.body; // Note donnée
 
-    if (!userId) {
-      return res.status(401).json({ message: "Authentification requise." });
+    if (!grade || grade < 1 || grade > 5) {
+      return res.status(400).json({ message: 'La note doit être comprise entre 1 et 5.' });
     }
 
-    const ratingValue = parseInt(rating, 10);
-    if (isNaN(ratingValue) || ratingValue < 1 || ratingValue > 5) {
-      return res.status(400).json({ message: 'La note doit être entre 1 et 5.' });
-    }
+    const book = await Book.findById(id);
 
-    const book = await Book.findById(req.params.id);
     if (!book) {
-      return res.status(404).json({ message: 'Livre non trouvé' });
+      return res.status(404).json({ message: 'Livre non trouvé.' });
     }
 
-    // Vérifiez si l'utilisateur a déjà noté ce livre
-    const existingRating = book.ratings.find(ratingObj => ratingObj.userId.toString() === userId.toString());
-    if (existingRating) {
-      existingRating.grade = ratingValue; // Met à jour la note existante
+    // Vérifier si l'utilisateur a déjà noté ce livre
+    const existingRatingIndex = book.ratings.findIndex(
+      (rating) => rating.userId.toString() === userId
+    );
+
+    if (existingRatingIndex !== -1) {
+      // Mettre à jour la note existante
+      book.ratings[existingRatingIndex].grade = grade;
     } else {
-      book.ratings.push({ userId: new mongoose.Types.ObjectId(userId), grade: ratingValue }); // Ajoute une nouvelle note
+      // Ajouter une nouvelle note
+      book.ratings.push({ userId, grade });
     }
 
-    // Calcul de la nouvelle moyenne
-    const totalGrades = book.ratings.reduce((acc, curr) => acc + curr.grade, 0);
-    book.averageRating = parseFloat((totalGrades / book.ratings.length).toFixed(1));
+    // Recalculer la moyenne
+    const totalRating = book.ratings.reduce((sum, rating) => sum + rating.grade, 0);
+    book.averageRating = totalRating / book.ratings.length;
 
     await book.save();
-    res.status(200).json(book);
 
+    res.status(200).json({ message: 'Note ajoutée ou mise à jour avec succès.', book });
   } catch (error) {
-    console.error("Erreur lors de l'ajout de la note au livre :", error.message);
-    res.status(500).json({ message: "Erreur lors de l'ajout de la note au livre." });
+    console.error('Erreur lors de l\'ajout ou de la mise à jour de la note :', error);
+    res.status(500).json({ message: 'Erreur interne du serveur.' });
   }
 };
+
+
 
 exports.updateBook = async (req, res) => {
   try {
     console.log("ID du livre à mettre à jour :", req.params.id);
-    console.log("Contenu de req.body :", req.body);
-    console.log("Contenu de req.file :", req.file);
+    console.log("Données reçues pour mise à jour :", req.body);
 
     const book = await Book.findById(req.params.id);
     if (!book) {
       return res.status(404).json({ message: 'Livre non trouvé' });
     }
 
-    // Log après avoir trouvé le livre
-    console.log("ID du créateur du livre :", book.creator.toString());
-    console.log("ID de l'utilisateur connecté :", req.userId);
+    console.log("Créateur du livre :", book.creator.toString());
+    console.log("Utilisateur connecté :", req.userId);
 
-    // Vérifiez que l'utilisateur est le créateur du livre
     if (book.creator.toString() !== req.userId) {
       return res.status(403).json({ message: "Seul le créateur peut mettre à jour ce livre." });
     }
 
-    // Mettre à jour les champs modifiables
+    // Mise à jour des champs du livre
     book.title = req.body.title || book.title;
     book.author = req.body.author || book.author;
     book.year = req.body.year || book.year;
     book.genre = req.body.genre || book.genre;
 
-    // Si une nouvelle image est téléchargée
+    // Gestion de l'image
     if (req.file) {
-      // Supprimer l'ancienne image si elle existe et n'est pas une URL externe
       if (book.imageUrl && !book.imageUrl.startsWith('http')) {
         const oldImagePath = path.join(__dirname, '..', book.imageUrl);
         fs.unlink(oldImagePath, (err) => {
-          if (err) {
-            console.error("Erreur lors de la suppression de l'ancienne image :", err.message);
-          } else {
-            console.log("Ancienne image supprimée :", oldImagePath);
-          }
+          if (err) console.error("Erreur lors de la suppression de l'image :", err.message);
+          else console.log("Ancienne image supprimée :", oldImagePath);
         });
       }
       book.imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
     }
 
     await book.save();
-    console.log("Livre mis à jour avec succès :", book);
-    res.status(200).json({ 
-      ...book._doc, 
+    console.log("Livre mis à jour :", book);
+
+    res.status(200).json({
+      ...book._doc,
       id: book._id,
-      imageUrl: book.imageUrl.startsWith('http') 
-        ? book.imageUrl 
-        : `${req.protocol}://${req.get('host')}${book.imageUrl}`,
-      creator: book.creator ? book.creator.toString() : null
+      imageUrl: book.imageUrl.startsWith('http') ? book.imageUrl : `${req.protocol}://${req.get('host')}${book.imageUrl}`,
     });
 
   } catch (error) {
@@ -224,42 +220,43 @@ exports.updateBook = async (req, res) => {
 
 
 
+
 // Supprimer un livre (uniquement par le créateur)
 exports.deleteBook = async (req, res) => {
   try {
-    const userId = req.userId;
-    if (!userId) {
-      return res.status(401).json({ message: "Authentification requise." });
-    }
+    console.log("ID du livre à supprimer :", req.params.id);
 
     const book = await Book.findById(req.params.id);
     if (!book) {
       return res.status(404).json({ message: 'Livre non trouvé' });
     }
 
-    // Vérifiez si l'utilisateur est le créateur du livre
-    if (book.creator.toString() !== userId.toString()) {
+    console.log("Créateur du livre :", book.creator.toString());
+    console.log("Utilisateur connecté :", req.userId);
+
+    if (book.creator.toString() !== req.userId) {
       return res.status(403).json({ message: "Seul le créateur peut supprimer ce livre." });
     }
 
-    // Supprimer l'image associée si nécessaire
+    // Suppression de l'image si nécessaire
     if (book.imageUrl && !book.imageUrl.startsWith('http')) {
       const imagePath = path.join(__dirname, '..', book.imageUrl);
       fs.unlink(imagePath, (err) => {
-        if (err) {
-          console.error("Erreur lors de la suppression de l'image :", err.message);
-        }
+        if (err) console.error("Erreur lors de la suppression de l'image :", err.message);
+        else console.log("Image supprimée :", imagePath);
       });
     }
 
     await book.deleteOne();
-    res.status(200).json({ message: 'Livre supprimé' });
+    console.log("Livre supprimé :", book.title);
+    res.status(200).json({ message: 'Livre supprimé avec succès.' });
 
   } catch (error) {
     console.error("Erreur lors de la suppression du livre :", error.message);
     res.status(500).json({ message: 'Erreur lors de la suppression du livre.' });
   }
 };
+
 
 // Récupérer les livres avec la meilleure note
 exports.getBestRatedBooks = async (req, res) => {

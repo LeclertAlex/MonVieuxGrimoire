@@ -6,25 +6,43 @@ const User = require('../mongoose-models/User');
 // Inscription de l'utilisateur
 exports.signup = async (req, res) => {
   try {
-    const plainPassword = req.body.password;
-    console.log("Mot de passe avant le hachage (signup):", plainPassword);
+    const { email, password } = req.body;
 
-    // Hachage du mot de passe
-    const hashedPassword = await bcrypt.hash(plainPassword, 10);
-    console.log("Mot de passe haché (signup):", hashedPassword);
+    // Ajout de logs pour déboguer les validations
+    console.log("Email reçu :", email);
+    console.log("Mot de passe reçu :", password);
 
-    // Création et sauvegarde de l'utilisateur avec le hachage
-    const user = new User({
-      username: req.body.username,
-      email: req.body.email,
-      password: hashedPassword
-    });
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email et mot de passe sont requis.' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      console.log("Validation échouée : email invalide.");
+      return res.status(400).json({ message: 'Adresse email invalide.' });
+    }
+
+    if (password.length < 6) {
+      console.log("Validation échouée : mot de passe trop court.");
+      return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 6 caractères.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ email, password: hashedPassword });
     await user.save();
-    res.status(201).json({ message: 'Utilisateur créé !' });
+    console.log("Utilisateur créé :", user);
+
+    res.status(201).json({ message: 'Utilisateur créé avec succès.' });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    if (error.code === 11000) {
+      console.log("Erreur MongoDB : Email dupliqué.");
+      return res.status(400).json({ message: 'Email déjà utilisé.' });
+    }
+    console.error("Erreur interne :", error);
+    res.status(500).json({ message: 'Erreur interne du serveur.' });
   }
 };
+
 
 
 // Connexion de l'utilisateur

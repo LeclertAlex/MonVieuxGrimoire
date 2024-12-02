@@ -16,12 +16,15 @@ const bookSchema = new mongoose.Schema({
   averageRating: { type: Number, default: 0 },
   ratings: [
     {
-      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      grade: { type: Number, required: true }
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // L'utilisateur qui a donné la note
+      grade: { type: Number, required: true }, // La note donnée
     }
   ],
-  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // L'utilisateur qui a créé le livre
 });
+
+module.exports = mongoose.model('Book', bookSchema);
+
 
 
 

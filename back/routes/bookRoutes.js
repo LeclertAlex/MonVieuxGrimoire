@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const bookController = require('../controllers/bookController');
 const auth = require('../middleware/auth');
+const isCreator = require('../middleware/Creator-Validation');
 
 const router = express.Router();
 
@@ -32,15 +33,17 @@ const upload = multer({
 });
 
 // Routes spécifiques avant les routes dynamiques
-router.get('/bestrating', bookController.getBestRatedBooks); // Cette route doit venir avant /:id
-router.get('/fromjson', bookController.getBooksFromJson);
+router.get('/bestrating', bookController.getBestRatedBooks); // Récupérer les meilleurs livres
+router.get('/fromjson', bookController.getBooksFromJson); // Charger des livres depuis un fichier JSON
 
-// Routes pour les livres
-router.post('/', auth, upload.single('image'), bookController.createBook);
-router.get('/', bookController.getAllBooks);
-router.get('/:id', bookController.getBookById);
-router.put('/:id', auth, upload.single('image'), bookController.updateBook);
-router.delete('/:id', auth, bookController.deleteBook);
-router.post('/:id/rating', auth, bookController.rateBook);
+// CRUD des livres
+router.post('/', auth, upload.single('image'), bookController.createBook); // Créer un livre
+router.get('/', bookController.getAllBooks); // Liste des livres
+router.get('/:id', bookController.getBookById); // Détails d'un livre
+router.put('/:id', auth, upload.single('image'), bookController.updateBook); // Mettre à jour un livre
+router.delete('/:id', auth, bookController.deleteBook); // Supprimer un livre
+
+// Gestion des notes
+router.post('/:id/rating', auth, bookController.rateBook); // Ajouter ou mettre à jour une note
 
 module.exports = router;
