@@ -1,9 +1,22 @@
 const mongoose = require('mongoose');
-
+const mongooseLeanVirtuals = require('mongoose-lean-virtuals');
 // Schéma pour la notation d'un livre
 const ratingSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  grade: { type: Number, required: true, min: 1, max: 5 }
+  grade: { type: Number, required: true, min: 1, max: 5 },
+});
+
+// Ajouter un champ virtuel `id` pour les ratings
+ratingSchema.virtual('id').get(function () {
+  return this._id.toHexString();
+});
+
+ratingSchema.set('toJSON', {
+  virtuals: true,
+  versionKey: false, // Supprime le champ `__v`
+  transform: function (doc, ret) {
+    delete ret._id;
+  },
 });
 
 // Schéma pour le livre
@@ -13,51 +26,30 @@ const bookSchema = new mongoose.Schema({
   year: { type: Number, required: true },
   genre: { type: String, required: true },
   imageUrl: { type: String, required: true },
-  averageRating: { type: Number, default: 0 },
   ratings: [
     {
-      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // L'utilisateur qui a donné la note
-      grade: { type: Number, required: true }, // La note donnée
-    }
-  ],
-  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // L'utilisateur qui a créé le livre
+      userId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      grade: { type: Number, required: true },
+    },
+  ], // Tableau de notations
+  averageRating: { type: Number, default: 0 },
+  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Créateur
 });
 
-module.exports = mongoose.model('Book', bookSchema);
-
-
-
-
-// Middleware pour calculer la note moyenne avant sauvegarde
-bookSchema.pre('save', function (next) {
-  if (this.ratings.length > 0) {
-    const totalRatings = this.ratings.reduce((acc, rating) => acc + rating.grade, 0);
-    this.averageRating = totalRatings / this.ratings.length;
-  } else {
-    this.averageRating = 0; // Par défaut si pas de notes
-  }
-  next();
+// Ajouter le champ virtuel `id` qui contient la valeur de `_id`
+bookSchema.virtual('id').get(function () {
+  return this._id.toHexString();
 });
 
-// Méthode statique pour ajouter ou mettre à jour une note
-bookSchema.statics.addOrUpdateRating = async function (bookId, userId, grade) {
-  const book = await this.findById(bookId);
-  if (!book) {
-    throw new Error("Livre non trouvé");
-  }
+// Configurer `toJSON` pour inclure les virtuels et supprimer les champs indésirables
+bookSchema.set('toJSON', {
+  virtuals: true,
+  versionKey: false, // Supprime le champ 
+  transform: function (doc, ret) {
+    ret.id = ret._id.toString(); 
+    ret.creator = ret.creator ? ret.creator.toString() : null; // Convertir `creator` en string
+    delete ret._id; // Supprimer `_id` pour éviter la confusion avec `id`
+  },
+});
 
-  // Vérifiez si l'utilisateur a déjà noté ce livre
-  const existingRating = book.ratings.find(rating => rating.userId.toString() === userId.toString());
-  if (existingRating) {
-    existingRating.grade = grade; // Met à jour la note existante
-  } else {
-    book.ratings.push({ userId, grade }); // Ajoute une nouvelle note
-  }
-
-  // Calcul de la nouvelle moyenne (automatiquement pris en charge par le middleware `pre('save')`)
-  await book.save();
-  return book;
-};
-
-// Exporter le modèle Book
 module.exports = mongoose.model('Book', bookSchema);

@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-module.exports = (req, res, next) => {
+const auth = (req, res, next) => {
   try {
     // Vérifie que la clé secrète JWT est définie
     if (!process.env.JWT_SECRET) {
@@ -13,6 +13,7 @@ module.exports = (req, res, next) => {
       console.error("Erreur : en-tête Authorization manquant");
       return res.status(401).json({ message: 'Requête non authentifiée - en-tête Authorization manquant' });
     }
+    console.log("En-tête Authorization reçu :", req.headers.authorization);
 
     // Vérifie que l'en-tête Authorization contient "Bearer"
     if (!req.headers.authorization.startsWith('Bearer ')) {
@@ -54,3 +55,5 @@ module.exports = (req, res, next) => {
     res.status(401).json({ message: 'Requête non authentifiée' });
   }
 };
+
+module.exports = auth;

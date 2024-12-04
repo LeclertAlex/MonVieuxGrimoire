@@ -2,77 +2,56 @@ const Book = require('../mongoose-models/Book');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const isCreator = require('../middleware/Creator-Validation');
+const isCreator = require('../middleware/isCreator');
 
 // Créer un livre avec une note initiale facultative
 exports.createBook = async (req, res) => {
   try {
-    console.log("Contenu complet de req.body :", req.body);
-    console.log("Contenu de req.file :", req.file);
-
-    const userId = req.userId; // ID de l'utilisateur connecté, extrait du token JWT
+    const userId = req.userId; // ID de l'utilisateur connecté
     if (!userId) {
-      console.log("Utilisateur non authentifié");
       return res.status(401).json({ message: "Authentification requise." });
     }
 
-    // Extraire les données du livre
-    let title, author, year, genre, initialGrade;
+    let { title, author, year, genre, rating } = req.body;
+
+    // Si les données du livre sont envoyées sous forme de chaîne JSON
     if (req.body.book) {
-      try {
-        const bookData = JSON.parse(req.body.book);
-        title = bookData.title;
-        author = bookData.author;
-        year = bookData.year;
-        genre = bookData.genre;
-        initialGrade = bookData.ratings && bookData.ratings[0] ? bookData.ratings[0].grade : null;
-      } catch (parseError) {
-        console.error("Erreur lors du parsing des données du livre :", parseError.message);
-        return res.status(400).json({ message: "Données du livre invalides." });
-      }
-    } else {
-      title = req.body.title;
-      author = req.body.author;
-      year = req.body.year;
-      genre = req.body.genre;
-      initialGrade = req.body.ratings && req.body.ratings[0] ? req.body.ratings[0].grade : null;
+      const bookData = JSON.parse(req.body.book);
+      title = bookData.title;
+      author = bookData.author;
+      year = bookData.year;
+      genre = bookData.genre;
+      rating = bookData.rating || 0;
     }
 
     const imageUrl = req.file
       ? `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`
       : req.body.imageUrl;
 
-    if (!title || !author || !imageUrl) {
-      return res.status(400).json({ message: "Les champs title, author et imageUrl sont requis." });
+    if (!title || !author || !imageUrl || !year || !genre) {
+      return res.status(400).json({ message: "Tous les champs sont requis." });
     }
 
-    // Création du livre avec une note initiale si fournie
-    let ratings = [];
-    let averageRating = 0;
-
-    if (initialGrade) {
-      const ratingValue = parseInt(initialGrade, 10);
-      if (!isNaN(ratingValue) && ratingValue >= 1 && ratingValue <= 5) {
-        ratings.push({ userId: new mongoose.Types.ObjectId(userId), grade: ratingValue });
-        averageRating = ratingValue;
-      }
-    }
-
-    // Création du livre avec le champ `creator`
-    const book = new Book({
+    const newBook = new Book({
       title,
       author,
       year,
       genre,
       imageUrl,
-      ratings,
-      averageRating,
-      creator: new mongoose.Types.ObjectId(userId) // Assurez-vous d'utiliser `new` ici
+      creator: userId,
     });
 
-    await book.save();
-    res.status(201).json(book);
+    // Ajouter la note initiale si elle est valide
+    const ratingValue = parseInt(rating, 10);
+    if (!isNaN(ratingValue) && ratingValue >= 1 && ratingValue <= 5) {
+      newBook.ratings.push({ userId, grade: ratingValue });
+      newBook.averageRating = ratingValue;
+    }
 
+    await newBook.save();
+
+    // Renvoyer le livre créé avec les virtuals appliqués
+    res.status(201).json(newBook.toObject({ virtuals: true }));
   } catch (error) {
     console.error("Erreur lors de la création du livre :", error.message);
     res.status(500).json({ message: "Erreur lors de la création du livre." });
@@ -80,138 +59,156 @@ exports.createBook = async (req, res) => {
 };
 
 
-
 // Récupérer tous les livres et inclure averageRating et creator dans chaque livre
 exports.getAllBooks = async (req, res) => {
   try {
-    const books = await Book.find();
+    const books = await Book.find().lean({ virtuals: true });
 
-    const formattedBooks = books.map(book => ({
-      ...book._doc,
-      id: book._id,
-      userId: book.creator ? book.creator.toString() : null, // Ajout de userId basé sur creator
-      imageUrl: book.imageUrl.startsWith('http')
-        ? book.imageUrl
-        : `${req.protocol}://${req.get('host')}${book.imageUrl}`,
+    // Convertir `creator` pour chaque livre en chaîne de caractères
+    const transformedBooks = books.map(book => ({
+      ...book,
+      creator: book.creator.toString(),
     }));
-    
-    res.status(200).json(formattedBooks);    
+
+    console.log("Liste des livres après transformation :", transformedBooks); // Log pour vérifier
+    res.status(200).json(transformedBooks);
   } catch (error) {
-    console.error("Erreur lors de la récupération des livres :", error.message);
-    res.status(500).json({ message: "Erreur lors de la récupération des livres." });
-  }
-};
-
-// Récupérer un livre par ID
-exports.getBookById = async (req, res) => {
-  try {
-    const book = await Book.findById(req.params.id);
-    if (!book) {
-      return res.status(404).json({ message: 'Livre non trouvé' });
-    }
-    res.status(200).json({ 
-      ...book._doc, 
-      id: book._id,
-      userId: book.creator ? book.creator.toString() : null, // Ajout de userId basé sur creator
-      imageUrl: book.imageUrl.startsWith('http') 
-        ? book.imageUrl 
-        : `${req.protocol}://${req.get('host')}${book.imageUrl}`,
-    });
-  } catch (error) {
-    console.error("Erreur lors de la récupération du livre :", error.message);
-    res.status(500).json({ message: "Erreur lors de la récupération du livre." });
-  }
-};
-
-// Ajouter une note à un livre (sans restriction pour le créateur)
-exports.rateBook = async (req, res) => {
-  try {
-    const { userId } = req; // ID de l'utilisateur connecté
-    const { id } = req.params; // ID du livre
-    const { grade } = req.body; // Note donnée
-
-    if (!grade || grade < 1 || grade > 5) {
-      return res.status(400).json({ message: 'La note doit être comprise entre 1 et 5.' });
-    }
-
-    const book = await Book.findById(id);
-
-    if (!book) {
-      return res.status(404).json({ message: 'Livre non trouvé.' });
-    }
-
-    // Vérifier si l'utilisateur a déjà noté ce livre
-    const existingRatingIndex = book.ratings.findIndex(
-      (rating) => rating.userId.toString() === userId
-    );
-
-    if (existingRatingIndex !== -1) {
-      // Mettre à jour la note existante
-      book.ratings[existingRatingIndex].grade = grade;
-    } else {
-      // Ajouter une nouvelle note
-      book.ratings.push({ userId, grade });
-    }
-
-    // Recalculer la moyenne
-    const totalRating = book.ratings.reduce((sum, rating) => sum + rating.grade, 0);
-    book.averageRating = totalRating / book.ratings.length;
-
-    await book.save();
-
-    res.status(200).json({ message: 'Note ajoutée ou mise à jour avec succès.', book });
-  } catch (error) {
-    console.error('Erreur lors de l\'ajout ou de la mise à jour de la note :', error);
+    console.error('Erreur lors de la récupération des livres :', error);
     res.status(500).json({ message: 'Erreur interne du serveur.' });
   }
 };
 
 
+// Récupérer un livre par ID
+exports.getBookById = async (req, res) => {
+  try {
+    const bookId = req.params.id;
 
+    // Vérifiez si l'ID est valide
+    if (!mongoose.Types.ObjectId.isValid(bookId)) {
+      return res.status(400).json({ message: 'ID invalide.' });
+    }
+
+    // Trouver le livre par son ID
+    const book = await Book.findById(bookId).lean({ virtuals: true });
+
+    // Si le livre n'existe pas
+    if (!book) {
+      return res.status(404).json({ message: 'Livre non trouvé.' });
+    }
+
+    // Transformez `creator` en `userId` pour le frontend
+    book.userId = book.creator.toString();
+    delete book.creator; // Supprimez le champ `creator` si non nécessaire pour éviter la confusion
+
+    console.log("Détails du livre après transformation :", book);
+
+    // Envoyez la réponse avec le champ `userId`
+    res.status(200).json(book);
+  } catch (error) {
+    console.error("Erreur lors de la récupération du livre :", error.message);
+    res.status(500).json({ message: 'Erreur interne du serveur.' });
+  }
+};
+
+
+// Ajouter une note à un livre (noteurs, éviter les doublons. Si un utilisateur a déjà noté, sa note est mise à jour.)
+exports.rateBook = async (req, res) => {
+  try {
+    const bookId = req.params.id;
+    const userId = req.userId; // Supposant que `userId` est extrait d'un middleware d'authentification
+    const { rating } = req.body;
+
+    // Vérifications
+    if (!bookId || bookId === 'undefined' || !mongoose.Types.ObjectId.isValid(bookId)) {
+      return res.status(400).json({ message: 'ID du livre invalide ou manquant.' });
+    }
+
+    const ratingValue = parseInt(rating, 10);
+    if (isNaN(ratingValue) || ratingValue < 1 || ratingValue > 5) {
+      return res.status(400).json({ message: 'Note invalide. Elle doit être un nombre entre 1 et 5.' });
+    }
+
+    // Rechercher le livre
+    const book = await Book.findById(bookId);
+    if (!book) {
+      return res.status(404).json({ message: 'Livre non trouvé.' });
+    }
+
+    // Vérifier si l'utilisateur a déjà noté le livre
+    const existingRatingIndex = book.ratings.findIndex((r) => r.userId.toString() === userId);
+
+    if (existingRatingIndex !== -1) {
+      // Mettre à jour la note existante
+      book.ratings[existingRatingIndex].grade = ratingValue;
+    } else {
+      // Ajouter une nouvelle note
+      book.ratings.push({ userId, grade: ratingValue });
+    }
+
+    // Recalculer la moyenne des notes
+    const totalRatings = book.ratings.reduce((sum, r) => sum + r.grade, 0);
+    book.averageRating = totalRatings / book.ratings.length;
+
+    await book.save();
+
+    // Renvoyer le livre mis à jour avec les virtuals appliqués
+    res.status(200).json(book.toObject({ virtuals: true }));
+  } catch (error) {
+    console.error("Erreur lors de l'ajout ou mise à jour de la note :", error.message);
+    res.status(500).json({ message: 'Erreur interne du serveur.' });
+  }
+};
+
+
+//misse a jours 
 exports.updateBook = async (req, res) => {
   try {
-    console.log("ID du livre à mettre à jour :", req.params.id);
-    console.log("Données reçues pour mise à jour :", req.body);
+    const bookId = req.params.id;
+    const userId = req.userId; // Extrait de l'authentification (middleware)
 
-    const book = await Book.findById(req.params.id);
+    if (!bookId || !mongoose.Types.ObjectId.isValid(bookId)) {
+      return res.status(400).json({ message: 'ID du livre invalide ou manquant.' });
+    }
+
+    const book = await Book.findById(bookId);
     if (!book) {
       return res.status(404).json({ message: 'Livre non trouvé' });
     }
 
-    console.log("Créateur du livre :", book.creator.toString());
-    console.log("Utilisateur connecté :", req.userId);
-
-    if (book.creator.toString() !== req.userId) {
-      return res.status(403).json({ message: "Seul le créateur peut mettre à jour ce livre." });
+    if (book.creator.toString() !== userId) {
+      return res.status(403).json({ message: "Vous n'êtes pas autorisé à modifier ce livre." });
     }
 
-    // Mise à jour des champs du livre
-    book.title = req.body.title || book.title;
-    book.author = req.body.author || book.author;
-    book.year = req.body.year || book.year;
-    book.genre = req.body.genre || book.genre;
+    const { title, author, year, genre } = req.body;
+
+    // Mise à jour des champs
+    if (title) book.title = title;
+    if (author) book.author = author;
+    if (year) book.year = year;
+    if (genre) book.genre = genre;
 
     // Gestion de l'image
     if (req.file) {
-      if (book.imageUrl && !book.imageUrl.startsWith('http')) {
-        const oldImagePath = path.join(__dirname, '..', book.imageUrl);
+      // Supprimer l'ancienne image si elle existe
+      if (book.imageUrl && book.imageUrl.startsWith(`${req.protocol}://${req.get('host')}/uploads/`)) {
+        const oldImagePath = path.join(__dirname, '..', 'uploads', path.basename(book.imageUrl));
         fs.unlink(oldImagePath, (err) => {
           if (err) console.error("Erreur lors de la suppression de l'image :", err.message);
-          else console.log("Ancienne image supprimée :", oldImagePath);
         });
       }
       book.imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
     }
 
+    console.log("updateBook - req.body :", req.body);
+    console.log("updateBook - req.file :", req.file);
+    console.log("updateBook - book avant mise à jour :", book);
+
+
     await book.save();
-    console.log("Livre mis à jour :", book);
 
-    res.status(200).json({
-      ...book._doc,
-      id: book._id,
-      imageUrl: book.imageUrl.startsWith('http') ? book.imageUrl : `${req.protocol}://${req.get('host')}${book.imageUrl}`,
-    });
-
+    // Renvoyer le livre mis à jour avec les virtuals appliqués
+    res.status(200).json(book.toObject({ virtuals: true }));
   } catch (error) {
     console.error("Erreur lors de la mise à jour du livre :", error.message);
     res.status(500).json({ message: 'Erreur lors de la mise à jour du livre.' });
@@ -219,55 +216,54 @@ exports.updateBook = async (req, res) => {
 };
 
 
-
-
 // Supprimer un livre (uniquement par le créateur)
 exports.deleteBook = async (req, res) => {
   try {
-    console.log("ID du livre à supprimer :", req.params.id);
+    const book = req.book; // Livre injecté par le middleware isCreator
 
-    const book = await Book.findById(req.params.id);
-    if (!book) {
-      return res.status(404).json({ message: 'Livre non trouvé' });
-    }
+    console.log("ID du livre à supprimer :", book._id);
+    console.log("Titre du livre :", book.title);
 
-    console.log("Créateur du livre :", book.creator.toString());
-    console.log("Utilisateur connecté :", req.userId);
-
-    if (book.creator.toString() !== req.userId) {
-      return res.status(403).json({ message: "Seul le créateur peut supprimer ce livre." });
-    }
-
-    // Suppression de l'image si nécessaire
-    if (book.imageUrl && !book.imageUrl.startsWith('http')) {
-      const imagePath = path.join(__dirname, '..', book.imageUrl);
+    // Suppression de l'image associée si nécessaire
+    if (book.imageUrl && book.imageUrl.startsWith(`${req.protocol}://${req.get('host')}/uploads/`)) {
+      const imagePath = path.join(__dirname, '..', 'uploads', path.basename(book.imageUrl));
       fs.unlink(imagePath, (err) => {
-        if (err) console.error("Erreur lors de la suppression de l'image :", err.message);
-        else console.log("Image supprimée :", imagePath);
+        if (err) {
+          console.error("Erreur lors de la suppression de l'image :", err.message);
+        } else {
+          console.log("Image supprimée :", imagePath);
+        }
       });
     }
 
+    // Supprimer le livre
     await book.deleteOne();
-    console.log("Livre supprimé :", book.title);
-    res.status(200).json({ message: 'Livre supprimé avec succès.' });
 
+    res.status(200).json({ message: 'Livre supprimé avec succès.' });
   } catch (error) {
     console.error("Erreur lors de la suppression du livre :", error.message);
     res.status(500).json({ message: 'Erreur lors de la suppression du livre.' });
   }
 };
 
-
 // Récupérer les livres avec la meilleure note
 exports.getBestRatedBooks = async (req, res) => {
   try {
     console.log("Récupération des livres avec la meilleure note...");
-    const books = await Book.find().sort({ averageRating: -1 }).limit(5);
+    const books = await Book.find().sort({ averageRating: -1 }).limit(5).lean({ virtuals: true });
+
     if (!books || books.length === 0) {
       return res.status(404).json({ message: 'Aucun livre trouvé avec une note.' });
     }
-    console.log("Livres récupérés :", books);
-    res.status(200).json(books);
+
+    // Convertir `creator` pour chaque livre en chaîne de caractères
+    const transformedBooks = books.map(book => ({
+      ...book,
+      creator: book.creator.toString(),
+    }));
+
+    console.log("Livres récupérés après transformation :", transformedBooks); // Log pour vérifier
+    res.status(200).json(transformedBooks);
   } catch (error) {
     console.error("Erreur lors de la récupération des livres avec la meilleure note :", error.message);
     res.status(500).json({ message: "Erreur lors de la récupération des livres." });
@@ -280,7 +276,28 @@ exports.getBooksFromJson = (req, res) => {
   try {
     const filePath = path.join(__dirname, '../data/books.json');
     const booksData = fs.readFileSync(filePath, 'utf8');
-    const books = JSON.parse(booksData);
+    let books = JSON.parse(booksData);
+
+    // Si les livres ont un champ '_id', transformer pour ajouter 'id'
+    books = books.map(book => {
+      // Supprimer les IDs des notes si nécessaire
+      if (book.ratings && book.ratings.length > 0) {
+        book.ratings = book.ratings.map(rating => {
+          return {
+            ...rating,
+            id: rating._id ? rating._id.toString() : undefined,
+            _id: undefined,
+          };
+        });
+      }
+
+      return {
+        ...book,
+        id: book._id ? book._id.toString() : undefined,
+        _id: undefined,
+      };
+    });
+
     res.status(200).json(books);
   } catch (error) {
     console.error("Erreur lors de la récupération des livres depuis JSON :", error.message);
